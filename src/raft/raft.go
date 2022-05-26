@@ -18,6 +18,9 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
+	"fmt"
 	"math/rand"
 	//	"bytes"
 	"sync"
@@ -213,7 +216,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	//fmt.Printf("[ 	Make-func-rf(%v) 	]:  %v\n", rf.me, rf.overtime)
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
@@ -251,6 +253,7 @@ func (rf *Raft) ticker() {
 				rf.currentTerm += 1
 				rf.votedFor = rf.me
 				votedNums := 1 // 统计自身的票数
+				rf.persist()
 
 				// 每轮选举开始时，重新设置选举超时
 				rf.overtime = time.Duration(150+rand.Intn(200)) * time.Millisecond // 随机产生200-400ms
@@ -297,7 +300,6 @@ func (rf *Raft) ticker() {
 					reply := AppendEntriesReply{}
 
 					// 如果nextIndex[i]长度不等于rf.logs,代表与leader的log entries不一致，需要附带过去
-
 					args.Entries = rf.logs[rf.nextIndex[i]-1:]
 
 					// 代表已经不是初始值0
@@ -386,6 +388,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.votedFor = -1
+				rf.persist()
 			}
 		}
 	case Normal, Voted:
@@ -454,6 +457,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.status = Follower
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
+		rf.persist()
 	}
 
 	// 此时比自己任期小的都已经把票还原
@@ -470,19 +474,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 1、args.LastLogTerm < lastLogTerm是因为选举时应该首先看term，只要term大的，才代表存活在raft中越久
 		// 2、判断日志的最后一个index是否是最新的前提应该是要在这两个节点任期是否是相同的情况下，判断哪个数据更完整。
 		if args.LastLogTerm < lastLogTerm || (len(rf.logs) > 0 && args.LastLogTerm == rf.logs[len(rf.logs)-1].Term && args.LastLogIndex < len(rf.logs)) {
-
 			reply.VoteState = Expire
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
+			rf.persist()
 			return
 		}
 
 		// 给票数，并且返回true
 		rf.votedFor = args.CandidateId
-
 		reply.VoteState = Normal
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+		rf.persist()
 
 		rf.timer.Reset(rf.overtime)
 
@@ -582,13 +586,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			return
 		}
 
-	case Mismatch:
-		if args.Term != rf.currentTerm {
-			return
+	case Mismatch, AppCommitted:
+		if reply.Term > rf.currentTerm {
+			rf.status = Follower
+			rf.votedFor = -1
+			rf.timer.Reset(rf.overtime)
+			rf.currentTerm = reply.Term
+			rf.persist()
 		}
 		rf.nextIndex[server] = reply.UpNextIndex
 	//If AppendEntries RPC received from new leader: convert to follower(paper - 5.2)
-	//reason: 出现网络分区，该Leader已经OutOfDate(过时）
+	//reason: 出现网络分区，该Leader已经OutOfDate(过时）,term小于发送者
 	case AppOutOfDate:
 
 		// 该节点变成追随者,并重置rf状态
@@ -596,12 +604,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		rf.votedFor = -1
 		rf.timer.Reset(rf.overtime)
 		rf.currentTerm = reply.Term
+		rf.persist()
 
-	case AppCommitted:
-		if args.Term != rf.currentTerm {
-			return
-		}
-		rf.nextIndex[server] = reply.UpNextIndex
 	}
 
 	return
@@ -636,7 +640,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 1、 如果preLogIndex的大于当前日志的最大的下标说明跟随者缺失日志，拒绝附加日志
 	// 2、 如果preLog出`的任期和preLogIndex处的任期和preLogTerm不相等，那么说明日志存在conflict,拒绝附加日志
 	if args.PrevLogIndex > 0 && (len(rf.logs) < args.PrevLogIndex || rf.logs[args.PrevLogIndex-1].Term != args.PrevLogTerm) {
-
 		reply.AppState = Mismatch
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -670,6 +673,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.logs = append(rf.logs, args.Entries...)
 
 	}
+	rf.persist()
 
 	// 将日志提交至与Leader相同
 	for rf.lastApplied < args.LeaderCommit {
@@ -750,6 +754,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = len(rf.logs)
 	term = rf.currentTerm
 
+	rf.persist()
 	return index, term, isLeader
 
 }
@@ -762,12 +767,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+	//fmt.Printf("RaftNode[%d] persist starts, currentTerm[%d] voteFor[%d] log[%v]\n", rf.me, rf.currentTerm, rf.votedFor, rf.logs)
+	//fmt.Printf("%v\n", string(data))
 }
 
 //
@@ -779,20 +787,25 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var logs []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&logs) != nil {
+		fmt.Println("decode error")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.logs = logs
+
+		//fmt.Printf("RaftNode[%d] persist read, currentTerm[%d] voteFor[%d] log[%v]\n", rf.me, currentTerm, votedFor, logs)
+	}
 }
 
-//
+// CondInstallSnapshot
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 //
@@ -803,7 +816,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	return true
 }
 
-// the service says it has created a snapshot that has
+// Snapshot the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
