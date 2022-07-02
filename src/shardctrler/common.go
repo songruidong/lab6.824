@@ -7,10 +7,10 @@ package shardctrler
 // Join(servers) -- add a set of groups (gid -> server-list mapping).
 // Leave(gids) -- delete a set of groups.
 // Move(shard, gid) -- hand off one shard from current owner to gid.
-// Query(num) -> fetch Config # num, or latest config if num==-1.
+// Query(num) -> fetch UpConfig # num, or latest config if num==-1.
 //
-// A Config (configuration) describes a set of replica groups, and the
-// replica group responsible for each shard. Configs are numbered. Config
+// A UpConfig (configuration) describes a set of replica groups, and the
+// replica group responsible for each shard. Configs are numbered. UpConfig
 // #0 is the initial configuration, with no groups and all shards
 // assigned to group 0 (the invalid group).
 //

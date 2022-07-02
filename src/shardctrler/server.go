@@ -34,7 +34,7 @@ type ShardCtrler struct {
 	// Your data here.
 	configs []Config // indexed by config num
 
-	seqMap    map[int64]int   //为了确保seq只执行一次	clientId / seqId
+	seqMap    map[int64]int   //重复性检测	clientId -> seqId
 	waitChMap map[int]chan Op //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
 
 }
@@ -237,6 +237,8 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 			reply.Err = ErrWrongLeader
 
 		} else {
+
+			sc.mu.Lock()
 			reply.Err = OK
 			sc.seqMap[op.ClientId] = op.SeqId
 			if op.QueryNum == -1 || op.QueryNum >= len(sc.configs) {
@@ -244,6 +246,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 			} else {
 				reply.Config = sc.configs[op.QueryNum]
 			}
+			sc.mu.Unlock()
 		}
 	case <-timer.C:
 		reply.Err = ErrWrongLeader

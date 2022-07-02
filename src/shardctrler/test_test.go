@@ -148,7 +148,7 @@ func TestBasic(t *testing.T) {
 				if cf.Shards[i] != gid3 {
 					cf1 := ck.Query(-1)
 					if cf1.Num <= cf.Num {
-						t.Fatalf("Move should increase Config.Num")
+						t.Fatalf("Move should increase UpConfig.Num")
 					}
 				}
 			} else {
@@ -156,7 +156,7 @@ func TestBasic(t *testing.T) {
 				if cf.Shards[i] != gid4 {
 					cf1 := ck.Query(-1)
 					if cf1.Num <= cf.Num {
-						t.Fatalf("Move should increase Config.Num")
+						t.Fatalf("Move should increase UpConfig.Num")
 					}
 				}
 			}
@@ -385,7 +385,7 @@ func TestMulti(t *testing.T) {
 	if !isLeader {
 		t.Fatalf("Leader not found")
 	}
-	c := ck.Query(-1) // Config leader claims
+	c := ck.Query(-1) // UpConfig leader claims
 
 	cfg.ShutdownServer(leader)
 
