@@ -113,7 +113,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	ch := kv.getWaitCh(lastIndex)
 	defer func() {
 		kv.mu.Lock()
-		delete(kv.waitChMap, op.Index)
+		delete(kv.waitChMap, lastIndex)
 		kv.mu.Unlock()
 	}()
 
@@ -161,7 +161,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	ch := kv.getWaitCh(lastIndex)
 	defer func() {
 		kv.mu.Lock()
-		delete(kv.waitChMap, op.Index)
+		delete(kv.waitChMap, lastIndex)
 		kv.mu.Unlock()
 	}()
 
